@@ -1,0 +1,98 @@
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+a {
+  color: #38bdf8;
+  text-decoration: none;
+}
+
+nav {
+  background: #1e293b;
+  padding: 1rem 2rem;
+  display: flex;
+  gap: 1.5rem;
+  border-bottom: 1px solid #334155;
+}
+
+nav a.active {
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+main {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.75rem;
+  border-bottom: 1px solid #334155;
+}
+
+.status {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.status-completed { background: #14532d; color: #86efac; }
+.status-running { background: #1e3a5f; color: #93c5fd; }
+.status-queued { background: #422006; color: #fcd34d; }
+.status-dead_letter { background: #450a0a; color: #fca5a5; }
+.status-cancelled { background: #374151; color: #d1d5db; }
+
+button {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1d4ed8;
+}
+
+button.danger {
+  background: #dc2626;
+}
+
+input {
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  padding: 0.5rem;
+  border-radius: 4px;
+}
