@@ -49,9 +49,7 @@ class RedisQueueBackend(QueueBackend):
     async def get_due_scheduled(self, limit: int) -> list[TaskId]:
         now = datetime.now(UTC).timestamp()
         raw = await self._client.zrangebyscore(SCHEDULED_KEY, 0, now, start=0, num=limit)
-        return [
-            TaskId.from_string(item.decode() if isinstance(item, bytes) else item) for item in raw
-        ]
+        return [TaskId.from_string(item.decode() if isinstance(item, bytes) else item) for item in raw]
 
     async def mark_inflight(self, task_id: TaskId, worker_id: str, ttl_seconds: int) -> None:
         key = f"{INFLIGHT_PREFIX}{task_id}"
@@ -118,9 +116,7 @@ class RedisLeaderLock(LeaderLock):
         self._owner_id = owner_id
 
     async def acquire(self, ttl_seconds: int) -> bool:
-        return bool(
-            await self._client.set(LEADER_LOCK_KEY, self._owner_id, nx=True, ex=ttl_seconds)
-        )
+        return bool(await self._client.set(LEADER_LOCK_KEY, self._owner_id, nx=True, ex=ttl_seconds))
 
     async def renew(self, ttl_seconds: int) -> bool:
         current = await self._client.get(LEADER_LOCK_KEY)

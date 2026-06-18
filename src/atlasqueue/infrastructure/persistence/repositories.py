@@ -118,9 +118,7 @@ class SqlAlchemyTaskRepository(TaskRepository):
         return _to_domain_task(model) if model else None
 
     async def get_by_idempotency_key(self, key: str) -> Task | None:
-        result = await self._session.execute(
-            select(TaskModel).where(TaskModel.idempotency_key == key)
-        )
+        result = await self._session.execute(select(TaskModel).where(TaskModel.idempotency_key == key))
         model = result.scalar_one_or_none()
         return _to_domain_task(model) if model else None
 
@@ -138,9 +136,7 @@ class SqlAlchemyTaskRepository(TaskRepository):
         return [_to_domain_task(m) for m in result.scalars().all()]
 
     async def count_by_status(self) -> dict[str, int]:
-        result = await self._session.execute(
-            select(TaskModel.status, func.count()).group_by(TaskModel.status)
-        )
+        result = await self._session.execute(select(TaskModel.status, func.count()).group_by(TaskModel.status))
         return {status: count for status, count in result.all()}
 
 
@@ -241,9 +237,7 @@ class SqlAlchemyWorkerRepository(WorkerRepository):
         )
 
     async def list_workers(self, *, limit: int = 100) -> list[Worker]:
-        result = await self._session.execute(
-            select(WorkerModel).order_by(WorkerModel.last_seen_at.desc()).limit(limit)
-        )
+        result = await self._session.execute(select(WorkerModel).order_by(WorkerModel.last_seen_at.desc()).limit(limit))
         workers: list[Worker] = []
         for model in result.scalars().all():
             workers.append(

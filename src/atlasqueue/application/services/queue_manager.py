@@ -268,9 +268,7 @@ class InflightReconciler:
             if not task or task.status != TaskStatus.RUNNING:
                 await self._queue.clear_inflight(task_id)
                 continue
-            if task.started_at and datetime.now(UTC) - task.started_at > timedelta(
-                seconds=task.timeout_seconds + 30
-            ):
+            if task.started_at and datetime.now(UTC) - task.started_at > timedelta(seconds=task.timeout_seconds + 30):
                 from_status = task.status
                 task.attempts += 1
                 task.worker_id = None
