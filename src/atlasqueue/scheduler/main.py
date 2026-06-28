@@ -5,6 +5,7 @@ import socket
 import uuid
 
 from atlasqueue.infrastructure.di.container import Container
+from atlasqueue.infrastructure.observability.metrics import SCHEDULER_RELEASED, SCHEDULER_TICKS
 from atlasqueue.infrastructure.observability.telemetry import setup_telemetry
 from atlasqueue.shared.config import get_settings
 from atlasqueue.shared.logging import get_logger, setup_logging
@@ -29,10 +30,12 @@ async def run_scheduler() -> None:
             if acquired:
                 try:
                     while await lock.renew(settings.scheduler_lock_ttl):
+                        SCHEDULER_TICKS.inc()
                         async with container.session() as session:
                             scheduler = await container.scheduler_service(session)
                             processed = await scheduler.process_due_tasks()
                             if processed:
+                                SCHEDULER_RELEASED.inc(processed)
                                 logger.info("Released %d scheduled tasks", processed)
                             reconciler = await container.inflight_reconciler(session)
                             requeued = await reconciler.reconcile()

@@ -126,14 +126,40 @@ class SqlAlchemyTaskRepository(TaskRepository):
         self,
         *,
         status: TaskStatus | None = None,
+        name: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
         limit: int = 50,
         offset: int = 0,
     ) -> list[Task]:
-        query = select(TaskModel).order_by(TaskModel.created_at.desc()).limit(limit).offset(offset)
+        sort_column = {
+            "created_at": TaskModel.created_at,
+            "priority": TaskModel.priority,
+            "status": TaskModel.status,
+            "name": TaskModel.name,
+        }.get(sort_by, TaskModel.created_at)
+        order_clause = sort_column.desc() if sort_order.lower() == "desc" else sort_column.asc()
+        query = select(TaskModel).order_by(order_clause).limit(limit).offset(offset)
         if status:
             query = query.where(TaskModel.status == status.value)
+        if name:
+            query = query.where(TaskModel.name.ilike(f"%{name}%"))
         result = await self._session.execute(query)
         return [_to_domain_task(m) for m in result.scalars().all()]
+
+    async def count_tasks(
+        self,
+        *,
+        status: TaskStatus | None = None,
+        name: str | None = None,
+    ) -> int:
+        query = select(func.count()).select_from(TaskModel)
+        if status:
+            query = query.where(TaskModel.status == status.value)
+        if name:
+            query = query.where(TaskModel.name.ilike(f"%{name}%"))
+        result = await self._session.execute(query)
+        return int(result.scalar_one())
 
     async def count_by_status(self) -> dict[str, int]:
         result = await self._session.execute(select(TaskModel.status, func.count()).group_by(TaskModel.status))

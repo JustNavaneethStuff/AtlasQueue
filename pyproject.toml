@@ -28,6 +28,9 @@ dependencies = [
     "opentelemetry-instrumentation-httpx>=0.49b0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
     "python-multipart>=0.0.17",
+    "PyJWT>=2.9.0",
+    "bcrypt>=4.2.0",
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]
@@ -87,7 +90,7 @@ packages = ["atlasqueue"]
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
-module = ["testcontainers.*", "redis.*"]
+module = ["testcontainers.*", "redis.*", "slowapi.*", "jwt.*", "bcrypt.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

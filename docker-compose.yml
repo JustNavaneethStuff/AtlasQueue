@@ -14,16 +14,21 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   migrate:
     build:
@@ -32,8 +37,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://atlas:atlas@postgres:5432/atlasqueue
       REDIS_URL: redis://redis:6379/0
-      API_KEY: dev-api-key
-      WORKER_API_KEY: dev-api-key
+      API_KEY: ${API_KEY:-dev-api-key}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-change-me}
     command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
@@ -48,10 +54,13 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://atlas:atlas@postgres:5432/atlasqueue
       REDIS_URL: redis://redis:6379/0
-      API_KEY: dev-api-key
-      WORKER_API_KEY: dev-api-key
+      API_KEY: ${API_KEY:-dev-api-key}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin-change-me}
       CORS_ORIGINS: http://localhost:5173,http://localhost:3000
       LOG_LEVEL: INFO
+      LOG_JSON: "true"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -62,6 +71,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
 
   worker:
     build:
@@ -70,11 +85,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://atlas:atlas@postgres:5432/atlasqueue
       REDIS_URL: redis://redis:6379/0
-      API_KEY: dev-api-key
-      WORKER_API_KEY: dev-api-key
+      API_KEY: ${API_KEY:-dev-api-key}
       WORKER_TASKS_MODULE: atlasqueue.worker.example_tasks
       WORKER_CONCURRENCY: 4
       LOG_LEVEL: INFO
+      LOG_JSON: "true"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -82,8 +97,7 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
-    deploy:
-      replicas: 1
+    restart: unless-stopped
 
   scheduler:
     build:
@@ -92,14 +106,14 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://atlas:atlas@postgres:5432/atlasqueue
       REDIS_URL: redis://redis:6379/0
-      API_KEY: dev-api-key
-      WORKER_API_KEY: dev-api-key
       LOG_LEVEL: INFO
+      LOG_JSON: "true"
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build:
@@ -119,6 +133,22 @@ services:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
       - api
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./deploy/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  redis_data:

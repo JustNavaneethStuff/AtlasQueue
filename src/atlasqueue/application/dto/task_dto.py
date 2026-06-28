@@ -48,6 +48,8 @@ class TaskResponse(BaseModel):
 class TaskListResponse(BaseModel):
     tasks: list[TaskResponse]
     total: int
+    limit: int
+    offset: int
 
 
 class RegisterWorkerRequest(BaseModel):
@@ -88,3 +90,17 @@ class HealthResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+    code: str = "error"
+    request_id: str | None = None
+    errors: list[dict[str, Any]] | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    role: str

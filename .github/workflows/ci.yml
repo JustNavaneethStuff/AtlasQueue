@@ -38,6 +38,10 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       API_KEY: test-api-key
       WORKER_API_KEY: test-api-key
+      JWT_SECRET: test-jwt-secret
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin-test-password
+      LOG_JSON: "false"
 
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +68,18 @@ jobs:
         run: alembic upgrade head
 
       - name: Pytest
-        run: pytest tests --cov=atlasqueue --cov-report=term-missing
+        run: pytest tests --cov=atlasqueue --cov-report=term-missing --cov-report=xml --cov-fail-under=60
+
+      - name: Export OpenAPI schema
+        run: python scripts/export_openapi.py
+
+      - name: pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit || true
+
+      - name: Bandit
+        run: pip install bandit && bandit -r src/atlasqueue -ll
 
   docker-build:
     runs-on: ubuntu-latest
@@ -80,3 +95,23 @@ jobs:
 
       - name: Build scheduler image
         run: docker build --target scheduler -t atlasqueue-scheduler .
+
+      - name: Trivy scan API image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: atlasqueue-api
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose smoke test
+        run: |
+          docker compose up -d --build postgres redis migrate api
+          timeout 120 bash -c 'until curl -sf http://localhost:8000/v1/health; do sleep 3; done'
+          curl -sf http://localhost:8000/v1/ready
+          docker compose down -v

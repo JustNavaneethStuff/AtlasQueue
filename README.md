@@ -36,8 +36,9 @@ Monitoring (Prometheus + OpenTelemetry + Dashboard)
 - Dual execution: Python `@task` handlers + HTTP webhooks
 - Worker registration and heartbeats
 - Task cancellation and timeouts
-- API key authentication
-- Prometheus metrics and OpenTelemetry tracing
+- API key or JWT authentication with role-based authorization
+- Structured JSON logging with correlation IDs
+- Prometheus metrics, Grafana dashboards, and OpenTelemetry tracing
 - React admin dashboard
 
 ## Quick Start
@@ -57,9 +58,18 @@ Services:
 - API: http://localhost:8000
 - Dashboard: http://localhost:5173
 - Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000
 - API docs: http://localhost:8000/docs
 
 Default API key: `dev-api-key` (set via `X-API-Key` header)
+
+JWT login:
+
+```bash
+curl -X POST http://localhost:8000/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin-change-me"}'
+```
 
 ### Submit a task
 
@@ -188,10 +198,21 @@ Clean Architecture with domain-driven folders:
 ## Testing
 
 ```bash
-pytest tests
+pytest tests --cov=atlasqueue --cov-fail-under=60
 ruff check src tests
 mypy src/atlasqueue
 ```
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [API](docs/api.md)
+- [Database schema](docs/database-schema.md)
+- [Sequence diagrams](docs/sequence-diagrams.md)
+- [Performance notes](docs/performance.md)
+- [Interview notes](docs/interview/system-design.md)
+- [Production readiness checklist](docs/production-readiness-checklist.md)
+- [Runbook](docs/runbook.md)
 
 ## License
 

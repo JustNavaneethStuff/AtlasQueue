@@ -33,9 +33,11 @@ async def test_enqueue_dequeue_ready(redis_backend: RedisQueueBackend) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_scheduled_tasks(redis_backend: RedisQueueBackend) -> None:
+async def test_claim_due_scheduled(redis_backend: RedisQueueBackend) -> None:
     task_id = TaskId.generate()
     run_at = datetime.now(UTC) - timedelta(seconds=1)
     await redis_backend.enqueue_scheduled(task_id, run_at)
-    due = await redis_backend.get_due_scheduled(limit=10)
-    assert task_id in due
+    claimed = await redis_backend.claim_due_scheduled(limit=10)
+    assert task_id in claimed
+    remaining = await redis_backend.get_due_scheduled(limit=10)
+    assert task_id not in remaining

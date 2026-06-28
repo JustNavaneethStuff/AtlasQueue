@@ -3,14 +3,9 @@ from __future__ import annotations
 import asyncio
 
 from atlasqueue.domain.entities.task import TaskId
+from atlasqueue.domain.value_objects.enums import TaskStatus
 from atlasqueue.infrastructure.di.container import Container
-from atlasqueue.infrastructure.http.webhook_client import WebhookExecutor
-from atlasqueue.infrastructure.persistence.repositories import (
-    SqlAlchemyTaskEventRepository,
-    SqlAlchemyTaskRepository,
-)
 from atlasqueue.shared.logging import get_logger
-from atlasqueue.worker.executor.python_executor import PythonHandlerExecutor, TaskExecutorService
 
 logger = get_logger(__name__)
 
@@ -22,16 +17,12 @@ class WorkerPool:
         worker_id: str,
         hostname: str,
         concurrency: int,
-        python_executor: PythonHandlerExecutor,
-        webhook_executor: WebhookExecutor,
         heartbeat_interval: int = 10,
     ) -> None:
         self._container = container
         self._worker_id = worker_id
         self._hostname = hostname
         self._concurrency = concurrency
-        self._python_executor = python_executor
-        self._webhook_executor = webhook_executor
         self._heartbeat_interval = heartbeat_interval
         self._semaphore = asyncio.Semaphore(concurrency)
         self._running = True
@@ -75,25 +66,15 @@ class WorkerPool:
     async def _process_task(self, task_id: TaskId) -> None:
         try:
             async with self._container.session() as session:
-                task_repo = SqlAlchemyTaskRepository(session)
-                event_repo = SqlAlchemyTaskEventRepository(session)
-                queue = self._container.queue_backend()
-                task = await task_repo.get_by_id(task_id)
+                task_repo = await self._container.queue_manager(session)
+                task = await task_repo.get_task(task_id)
                 if not task:
                     logger.warning("Task %s not found in database", task_id)
                     return
-                from atlasqueue.domain.value_objects.enums import TaskStatus
-
                 if task.status != TaskStatus.QUEUED:
                     logger.warning("Task %s in unexpected status %s", task_id, task.status)
                     return
-                executor = TaskExecutorService(
-                    task_repo,
-                    event_repo,
-                    queue,
-                    self._python_executor,
-                    self._webhook_executor,
-                )
+                executor = await self._container.task_executor_service(session)
                 await executor.execute_task(task, self._worker_id)
         except Exception:
             logger.exception("Failed processing task %s", task_id)

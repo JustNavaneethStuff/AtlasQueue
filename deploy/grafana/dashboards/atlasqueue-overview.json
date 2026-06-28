@@ -1,0 +1,37 @@
+{
+  "title": "Atlas Queue Overview",
+  "uid": "atlasqueue-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP Request Rate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "sum(rate(atlasqueue_http_requests_total[5m])) by (endpoint)", "legendFormat": "{{endpoint}}"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Task Throughput",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "sum(rate(atlasqueue_tasks_completed_total[5m])) by (status)", "legendFormat": "{{status}}"}
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Active Workers",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
+      "targets": [{"expr": "atlasqueue_workers_active"}]
+    },
+    {
+      "type": "stat",
+      "title": "DLQ Depth",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 8},
+      "targets": [{"expr": "atlasqueue_queue_depth{queue=\"dlq\"}"}]
+    }
+  ]
+}

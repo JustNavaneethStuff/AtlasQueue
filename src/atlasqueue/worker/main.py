@@ -5,15 +5,10 @@ import socket
 import uuid
 
 from atlasqueue.infrastructure.di.container import Container
-from atlasqueue.infrastructure.http.webhook_client import WebhookExecutor
 from atlasqueue.infrastructure.observability.telemetry import setup_telemetry
 from atlasqueue.shared.config import get_settings
 from atlasqueue.shared.logging import get_logger, setup_logging
-from atlasqueue.worker.executor.python_executor import (
-    PythonHandlerExecutor,
-    load_tasks_module,
-    registry,
-)
+from atlasqueue.worker.executor.python_executor import load_tasks_module
 from atlasqueue.worker.pool import WorkerPool
 
 logger = get_logger(__name__)
@@ -29,8 +24,6 @@ async def run_worker() -> None:
     load_tasks_module(settings.worker_tasks_module)
 
     container = Container(settings)
-    python_executor = PythonHandlerExecutor(registry)
-    webhook_executor = WebhookExecutor(settings)
 
     async with container.session() as session:
         registry_service = await container.worker_registry(session)
@@ -42,8 +35,6 @@ async def run_worker() -> None:
         worker_id=worker_id,
         hostname=hostname,
         concurrency=settings.worker_concurrency,
-        python_executor=python_executor,
-        webhook_executor=webhook_executor,
         heartbeat_interval=settings.worker_heartbeat_interval,
     )
 
@@ -51,7 +42,7 @@ async def run_worker() -> None:
     try:
         await pool.run()
     finally:
-        await webhook_executor.aclose()
+        await container.webhook_executor().aclose()
         await container.close()
 
 

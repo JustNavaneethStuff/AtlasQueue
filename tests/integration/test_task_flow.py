@@ -3,7 +3,7 @@ import os
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from atlasqueue.api.main import create_app
 from atlasqueue.infrastructure.persistence.models import Base
@@ -27,11 +27,6 @@ async def engine(database_url: str):
     await engine.dispose()
 
 
-@pytest_asyncio.fixture
-async def session_factory(engine):
-    return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
-
 @pytest.fixture
 def app():
     return create_app()
@@ -48,10 +43,17 @@ async def client(app):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_submit_and_get_task(client: AsyncClient) -> None:
-    response = await client.post(
-        "/v1/tasks",
-        json={"name": "echo", "payload": {"message": "test"}, "priority": 0},
-    )
+    try:
+        response = await client.post(
+            "/v1/tasks",
+            json={"name": "echo", "payload": {"message": "test"}, "priority": 0},
+        )
+    except Exception as exc:
+        from tests.conftest import _dependency_unavailable
+
+        if _dependency_unavailable(exc):
+            pytest.skip("Dependencies unavailable")
+        raise
     if response.status_code == 503:
         pytest.skip("Redis unavailable")
     assert response.status_code == 202

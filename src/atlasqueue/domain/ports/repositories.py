@@ -36,9 +36,20 @@ class TaskRepository:
         self,
         *,
         status: TaskStatus | None = None,
+        name: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
         limit: int = 50,
         offset: int = 0,
     ) -> list[Task]:
+        raise NotImplementedError
+
+    async def count_tasks(
+        self,
+        *,
+        status: TaskStatus | None = None,
+        name: str | None = None,
+    ) -> int:
         raise NotImplementedError
 
     async def count_by_status(self) -> dict[str, int]:
@@ -119,6 +130,13 @@ class QueueBackend:
         raise NotImplementedError
 
     async def get_active_workers(self) -> list[str]:
+        raise NotImplementedError
+
+    async def get_inflight_task_ids(self) -> list[TaskId]:
+        raise NotImplementedError
+
+    async def claim_due_scheduled(self, limit: int) -> list[TaskId]:
+        """Atomically claim due scheduled tasks for processing."""
         raise NotImplementedError
 
 

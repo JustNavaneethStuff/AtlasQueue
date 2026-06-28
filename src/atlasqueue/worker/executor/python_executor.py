@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import importlib
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
+from atlasqueue.application.services.task_failure_handler import TaskFailureHandler
 from atlasqueue.domain.entities.task import Task
 from atlasqueue.domain.ports.repositories import QueueBackend, TaskEventRepository, TaskRepository
 from atlasqueue.domain.value_objects.enums import ExecutorType, TaskStatus
@@ -84,6 +85,7 @@ class TaskExecutorService:
         self._queue = queue
         self._python = python_executor
         self._webhook = webhook_executor
+        self._failure_handler = TaskFailureHandler(task_repo, event_repo, queue)
 
     async def execute_task(self, task: Task, worker_id: str) -> None:
         if await self._queue.is_cancelled(task.id):
@@ -125,40 +127,8 @@ class TaskExecutorService:
             TASKS_COMPLETED.labels(task_name=task.name, status="completed").inc()
         except Exception as exc:
             logger.exception("Task %s failed: %s", task.id, exc)
-            await self._handle_failure(task, str(exc))
+            await self._failure_handler.handle_execution_failure(task, str(exc))
         finally:
             await self._queue.clear_inflight(task.id)
             duration = (datetime.now(UTC) - start).total_seconds()
             TASK_DURATION.labels(task_name=task.name).observe(duration)
-
-    async def _handle_failure(self, task: Task, error: str) -> None:
-        from_status = task.status
-        task.attempts += 1
-        task.error = error
-        if task.can_retry():
-            task.transition_to(TaskStatus.QUEUED)
-            delay = task.retry_delay_seconds()
-            run_at = datetime.now(UTC) + timedelta(seconds=delay)
-            await self._queue.enqueue_scheduled(task.id, run_at)
-            await self._task_repo.save(task)
-            await self._event_repo.append(
-                task.id,
-                "task.retry_scheduled",
-                from_status,
-                task.status,
-                message=f"Retry in {delay}s (attempt {task.attempts}/{task.max_retries})",
-            )
-            TASKS_COMPLETED.labels(task_name=task.name, status="retry").inc()
-        else:
-            task.transition_to(TaskStatus.DEAD_LETTER)
-            task.finished_at = datetime.now(UTC)
-            await self._queue.enqueue_dlq(task.id)
-            await self._task_repo.save(task)
-            await self._event_repo.append(
-                task.id,
-                "task.dead_letter",
-                from_status,
-                task.status,
-                message=error,
-            )
-            TASKS_COMPLETED.labels(task_name=task.name, status="dead_letter").inc()

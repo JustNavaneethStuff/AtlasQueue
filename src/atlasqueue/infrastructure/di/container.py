@@ -13,6 +13,7 @@ from atlasqueue.application.services.queue_manager import (
     SchedulerService,
     WorkerRegistry,
 )
+from atlasqueue.infrastructure.http.webhook_client import WebhookExecutor
 from atlasqueue.infrastructure.persistence.database import create_session_factory
 from atlasqueue.infrastructure.persistence.repositories import (
     SqlAlchemyTaskEventRepository,
@@ -25,6 +26,7 @@ from atlasqueue.infrastructure.redis.queue_backend import (
     create_redis_client,
 )
 from atlasqueue.shared.config import Settings, get_settings
+from atlasqueue.worker.executor.python_executor import PythonHandlerExecutor, TaskExecutorService
 
 
 class Container:
@@ -32,6 +34,20 @@ class Container:
         self.settings = settings or get_settings()
         self.session_factory: async_sessionmaker[AsyncSession] = create_session_factory(self.settings)
         self.redis: redis.Redis[bytes] = create_redis_client(self.settings)
+        self._python_executor: PythonHandlerExecutor | None = None
+        self._webhook_executor: WebhookExecutor | None = None
+
+    def python_executor(self) -> PythonHandlerExecutor:
+        if self._python_executor is None:
+            from atlasqueue.worker.executor.python_executor import registry
+
+            self._python_executor = PythonHandlerExecutor(registry)
+        return self._python_executor
+
+    def webhook_executor(self) -> WebhookExecutor:
+        if self._webhook_executor is None:
+            self._webhook_executor = WebhookExecutor(self.settings)
+        return self._webhook_executor
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[AsyncSession]:
@@ -81,6 +97,15 @@ class Container:
             SqlAlchemyTaskEventRepository(session),
             self.queue_backend(),
             self.settings,
+        )
+
+    async def task_executor_service(self, session: AsyncSession) -> TaskExecutorService:
+        return TaskExecutorService(
+            SqlAlchemyTaskRepository(session),
+            SqlAlchemyTaskEventRepository(session),
+            self.queue_backend(),
+            self.python_executor(),
+            self.webhook_executor(),
         )
 
     async def close(self) -> None:

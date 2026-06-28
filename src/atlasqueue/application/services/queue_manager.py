@@ -1,14 +1,27 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from atlasqueue.application.dto.task_dto import SubmitTaskRequest
 from atlasqueue.domain.entities.task import BackoffPolicy, Priority, Task, TaskId
 from atlasqueue.domain.entities.worker import Worker
-from atlasqueue.domain.ports.repositories import QueueBackend, TaskEventRepository, TaskRepository
+from atlasqueue.domain.exceptions import (
+    EnqueueFailedError,
+    InvalidTaskStateError,
+    PayloadTooLargeError,
+    TaskNotFoundError,
+)
+from atlasqueue.domain.ports.repositories import (
+    QueueBackend,
+    TaskEvent,
+    TaskEventRepository,
+    TaskRepository,
+    WorkerRepository,
+)
 from atlasqueue.domain.value_objects.enums import ExecutorType, TaskStatus
-from atlasqueue.infrastructure.observability.metrics import TASKS_SUBMITTED
+from atlasqueue.infrastructure.observability.metrics import TASKS_CANCELLED, TASKS_SUBMITTED
 from atlasqueue.shared.config import Settings
 from atlasqueue.shared.logging import get_logger
 
@@ -36,8 +49,7 @@ class QueueManager:
 
         payload_size = len(str(request.payload).encode())
         if payload_size > self._settings.max_payload_bytes:
-            msg = f"Payload exceeds max size of {self._settings.max_payload_bytes} bytes"
-            raise ValueError(msg)
+            raise PayloadTooLargeError(self._settings.max_payload_bytes)
 
         backoff = None
         if request.backoff_policy:
@@ -83,7 +95,7 @@ class QueueManager:
                 task.status,
                 message=str(exc),
             )
-            raise
+            raise EnqueueFailedError(str(exc)) from exc
 
         TASKS_SUBMITTED.labels(task_name=task.name, executor_type=task.executor_type.value).inc()
         return task
@@ -108,29 +120,70 @@ class QueueManager:
     async def get_task(self, task_id: TaskId) -> Task | None:
         return await self._task_repo.get_by_id(task_id)
 
+    async def get_task_or_raise(self, task_id: TaskId) -> Task:
+        task = await self.get_task(task_id)
+        if not task:
+            raise TaskNotFoundError(str(task_id))
+        return task
+
     async def list_tasks(
         self,
         *,
         status: TaskStatus | None = None,
+        name: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
         limit: int = 50,
         offset: int = 0,
     ) -> list[Task]:
-        return await self._task_repo.list_tasks(status=status, limit=limit, offset=offset)
+        return await self._task_repo.list_tasks(
+            status=status,
+            name=name,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_tasks(
+        self,
+        *,
+        status: TaskStatus | None = None,
+        name: str | None = None,
+    ) -> int:
+        return await self._task_repo.count_tasks(status=status, name=name)
+
+    async def get_task_events(self, task_id: TaskId) -> list[TaskEvent]:
+        await self.get_task_or_raise(task_id)
+        return await self._event_repo.list_for_task(task_id)
+
+    async def get_admin_stats(self) -> dict[str, Any]:
+        tasks_by_status = await self._task_repo.count_by_status()
+        depths = await self._queue.queue_depths()
+        active_redis = await self._queue.get_active_workers()
+        return {
+            "tasks_by_status": tasks_by_status,
+            "queue_depths": depths,
+            "active_workers": len(active_redis),
+        }
 
     async def retry_task(self, task_id: TaskId) -> Task:
-        task = await self._task_repo.get_by_id(task_id)
-        if not task:
-            msg = f"Task {task_id} not found"
-            raise ValueError(msg)
+        task = await self.get_task_or_raise(task_id)
         if task.status not in (TaskStatus.DEAD_LETTER, TaskStatus.FAILED):
-            msg = f"Task {task_id} is not in a retriable state: {task.status}"
-            raise ValueError(msg)
+            raise InvalidTaskStateError(f"Task {task_id} is not in a retriable state: {task.status}")
         from_status = task.status
         task.error = None
+        task.attempts = 0
+        task.worker_id = None
+        task.started_at = None
+        task.finished_at = None
         task.transition_to(TaskStatus.QUEUED)
         await self._queue.enqueue_ready(task.id, task.priority.value)
         await self._task_repo.save(task)
         await self._event_repo.append(task.id, "task.retried", from_status, task.status)
+        from atlasqueue.infrastructure.observability.metrics import TASKS_RETRIED
+
+        TASKS_RETRIED.inc()
         return task
 
     async def reconcile_enqueue_failed(self, batch_size: int = 50) -> int:
@@ -159,11 +212,9 @@ class CancellationService:
     async def cancel(self, task_id: TaskId) -> Task:
         task = await self._task_repo.get_by_id(task_id)
         if not task:
-            msg = f"Task {task_id} not found"
-            raise ValueError(msg)
+            raise TaskNotFoundError(str(task_id))
         if task.status in (TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.DEAD_LETTER):
-            msg = f"Task {task_id} cannot be cancelled in status {task.status}"
-            raise ValueError(msg)
+            raise InvalidTaskStateError(f"Task {task_id} cannot be cancelled in status {task.status}")
 
         from_status = task.status
         await self._queue.mark_cancelled(task_id)
@@ -173,8 +224,6 @@ class CancellationService:
         task.finished_at = datetime.now(UTC)
         await self._task_repo.save(task)
         await self._event_repo.append(task.id, "task.cancelled", from_status, task.status)
-        from atlasqueue.infrastructure.observability.metrics import TASKS_CANCELLED
-
         TASKS_CANCELLED.inc()
         return task
 
@@ -193,15 +242,13 @@ class SchedulerService:
         self._settings = settings
 
     async def process_due_tasks(self) -> int:
-        due_ids = await self._queue.get_due_scheduled(self._settings.scheduler_batch_size)
+        due_ids = await self._queue.claim_due_scheduled(self._settings.scheduler_batch_size)
         processed = 0
         for task_id in due_ids:
             task = await self._task_repo.get_by_id(task_id)
             if not task or task.status != TaskStatus.SCHEDULED:
-                await self._queue.remove_scheduled(task_id)
                 continue
             from_status = task.status
-            await self._queue.remove_scheduled(task_id)
             await self._queue.enqueue_ready(task.id, task.priority.value)
             task.transition_to(TaskStatus.QUEUED)
             await self._task_repo.save(task)
@@ -213,12 +260,10 @@ class SchedulerService:
 class WorkerRegistry:
     def __init__(
         self,
-        worker_repo: Any,
+        worker_repo: WorkerRepository,
         queue: QueueBackend,
     ) -> None:
-        from atlasqueue.domain.ports.repositories import WorkerRepository
-
-        self._worker_repo: WorkerRepository = worker_repo
+        self._worker_repo = worker_repo
         self._queue = queue
 
     async def register(self, hostname: str, metadata: dict[str, str] | None = None) -> Worker:
@@ -228,8 +273,6 @@ class WorkerRegistry:
         return worker
 
     async def heartbeat(self, worker_id: str, hostname: str) -> None:
-        from uuid import UUID
-
         worker = await self._worker_repo.get_by_id(UUID(worker_id))
         if worker:
             worker.heartbeat()
@@ -251,16 +294,16 @@ class InflightReconciler:
         queue: QueueBackend,
         settings: Settings,
     ) -> None:
+        from atlasqueue.application.services.task_failure_handler import TaskFailureHandler
+
         self._task_repo = task_repo
-        self._event_repo = event_repo
-        self._queue = queue
         self._settings = settings
+        self._failure_handler = TaskFailureHandler(task_repo, event_repo, queue)
+        self._queue = queue
 
     async def reconcile(self) -> int:
-        from atlasqueue.infrastructure.redis.queue_backend import RedisQueueBackend
+        from datetime import timedelta
 
-        if not isinstance(self._queue, RedisQueueBackend):
-            return 0
         requeued = 0
         inflight_ids = await self._queue.get_inflight_task_ids()
         for task_id in inflight_ids:
@@ -269,34 +312,6 @@ class InflightReconciler:
                 await self._queue.clear_inflight(task_id)
                 continue
             if task.started_at and datetime.now(UTC) - task.started_at > timedelta(seconds=task.timeout_seconds + 30):
-                from_status = task.status
-                task.attempts += 1
-                task.worker_id = None
-                task.started_at = None
-                if task.can_retry():
-                    task.transition_to(TaskStatus.QUEUED)
-                    delay = task.retry_delay_seconds()
-                    run_at = datetime.now(UTC) + timedelta(seconds=delay)
-                    await self._queue.enqueue_scheduled(task.id, run_at)
-                    await self._event_repo.append(
-                        task.id,
-                        "task.requeued_timeout",
-                        from_status,
-                        task.status,
-                        message=f"Requeued after timeout, delay={delay}s",
-                    )
-                else:
-                    task.transition_to(TaskStatus.DEAD_LETTER)
-                    task.finished_at = datetime.now(UTC)
-                    await self._queue.enqueue_dlq(task.id)
-                    await self._event_repo.append(
-                        task.id,
-                        "task.dead_letter",
-                        from_status,
-                        task.status,
-                        message="Exceeded max retries after timeout",
-                    )
-                await self._task_repo.save(task)
-                await self._queue.clear_inflight(task_id)
+                await self._failure_handler.handle_timeout(task)
                 requeued += 1
         return requeued

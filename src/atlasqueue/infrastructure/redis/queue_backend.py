@@ -16,11 +16,22 @@ CANCEL_KEY = "cancel:pending"
 WORKER_PREFIX = "workers:"
 LEADER_LOCK_KEY = "lock:scheduler"
 
+_CLAIM_DUE_SCRIPT = """
+local now = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local members = redis.call('ZRANGEBYSCORE', KEYS[1], 0, now, 'LIMIT', 0, limit)
+for i, member in ipairs(members) do
+  redis.call('ZREM', KEYS[1], member)
+end
+return members
+"""
+
 
 class RedisQueueBackend(QueueBackend):
     def __init__(self, client: redis.Redis[bytes], settings: Settings) -> None:
         self._client = client
         self._settings = settings
+        self._claim_due_script = self._client.register_script(_CLAIM_DUE_SCRIPT)
 
     def _ready_key(self, priority: int) -> str:
         return f"{READY_PREFIX}{priority}"
@@ -49,6 +60,13 @@ class RedisQueueBackend(QueueBackend):
     async def get_due_scheduled(self, limit: int) -> list[TaskId]:
         now = datetime.now(UTC).timestamp()
         raw = await self._client.zrangebyscore(SCHEDULED_KEY, 0, now, start=0, num=limit)
+        return [TaskId.from_string(item.decode() if isinstance(item, bytes) else item) for item in raw]
+
+    async def claim_due_scheduled(self, limit: int) -> list[TaskId]:
+        now = datetime.now(UTC).timestamp()
+        raw = await self._claim_due_script(keys=[SCHEDULED_KEY], args=[now, limit])
+        if not raw:
+            return []
         return [TaskId.from_string(item.decode() if isinstance(item, bytes) else item) for item in raw]
 
     async def mark_inflight(self, task_id: TaskId, worker_id: str, ttl_seconds: int) -> None:
@@ -92,22 +110,24 @@ class RedisQueueBackend(QueueBackend):
         await self._client.hset(key, mapping=mapping)  # type: ignore[arg-type]
         await self._client.expire(key, self._settings.worker_heartbeat_interval * 3)
 
+    async def _scan_keys(self, pattern: str) -> list[str]:
+        keys: list[str] = []
+        cursor = 0
+        while True:
+            cursor, batch = await self._client.scan(cursor=cursor, match=pattern, count=100)
+            for key in batch:
+                keys.append(key.decode() if isinstance(key, bytes) else key)
+            if cursor == 0:
+                break
+        return keys
+
     async def get_active_workers(self) -> list[str]:
-        keys = await self._client.keys(f"{WORKER_PREFIX}*")
-        worker_ids: list[str] = []
-        for key in keys:
-            key_str = key.decode() if isinstance(key, bytes) else key
-            worker_ids.append(key_str.replace(WORKER_PREFIX, ""))
-        return worker_ids
+        keys = await self._scan_keys(f"{WORKER_PREFIX}*")
+        return [key_str.replace(WORKER_PREFIX, "") for key_str in keys]
 
     async def get_inflight_task_ids(self) -> list[TaskId]:
-        keys = await self._client.keys(f"{INFLIGHT_PREFIX}*")
-        ids: list[TaskId] = []
-        for key in keys:
-            key_str = key.decode() if isinstance(key, bytes) else key
-            task_id_str = key_str.replace(INFLIGHT_PREFIX, "")
-            ids.append(TaskId.from_string(task_id_str))
-        return ids
+        keys = await self._scan_keys(f"{INFLIGHT_PREFIX}*")
+        return [TaskId.from_string(key_str.replace(INFLIGHT_PREFIX, "")) for key_str in keys]
 
 
 class RedisLeaderLock(LeaderLock):
